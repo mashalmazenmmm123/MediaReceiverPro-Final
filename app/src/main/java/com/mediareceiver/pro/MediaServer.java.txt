@@ -1,0 +1,344 @@
+package com.mediareceiver.pro;
+
+import android.content.res.AssetManager;
+import java.io.*;
+import java.net.*;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+public class MediaServer {
+    private ServerSocket serverSocket;
+    private boolean isRunning = false;
+    private MainActivity activity;
+    private int port = 8080;
+    private int visitorCount = 0;
+    private int fileCount = 0;
+    
+    public MediaServer(MainActivity activity) {
+        this.activity = activity;
+        initializeStorage();
+    }
+    
+    private void initializeStorage() {
+        FileUtils.getMediaStorageDir();
+        activity.updateLog("📁 Storage initialized: " + FileUtils.getMediaStorageDir().getAbsolutePath());
+    }
+    
+    public void startServer() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    serverSocket = new ServerSocket(port);
+                    isRunning = true;
+                    
+                    activity.updateLog("✅ Local server started on port " + port);
+                    activity.updateServerStatus(true);
+                    
+                    startServeoTunnel();
+                    
+                    while (isRunning) {
+                        try {
+                            Socket clientSocket = serverSocket.accept();
+                            handleClient(clientSocket);
+                        } catch (IOException e) {
+                            if (isRunning) {
+                                activity.updateLog("❌ Client connection error: " + e.getMessage());
+                            }
+                        }
+                    }
+                    
+                } catch (IOException e) {
+                    activity.updateLog("❌ Failed to start server: " + e.getMessage());
+                    activity.updateServerStatus(false);
+                }
+            }
+        }).start();
+    }
+    
+    private void handleClient(Socket clientSocket) {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(clientSocket.getInputStream()));
+                    OutputStream output = clientSocket.getOutputStream();
+                    PrintWriter writer = new PrintWriter(output);
+                    
+                    String requestLine = reader.readLine();
+                    if (requestLine == null) return;
+                    
+                    String clientIP = clientSocket.getInetAddress().getHostAddress();
+                    visitorCount++;
+                    activity.updateVisitorCount(visitorCount);
+                    
+                    activity.updateLog("👤 Visitor #" + visitorCount + " from: " + clientIP);
+                    
+                    if (requestLine.startsWith("GET")) {
+                        handleGetRequest(writer, clientIP);
+                    } else if (requestLine.startsWith("POST")) {
+                        handlePostRequest(reader, writer, clientIP);
+                    } else {
+                        sendErrorResponse(writer, 405, "Method Not Allowed");
+                    }
+                    
+                    clientSocket.close();
+                    
+                } catch (IOException e) {
+                    activity.updateLog("❌ Error handling client: " + e.getMessage());
+                }
+            }
+        }).start();
+    }
+    
+    private void handleGetRequest(PrintWriter writer, String clientIP) {
+        try {
+            String htmlContent = readHtmlFromAssets();
+            
+            htmlContent = htmlContent.replace("{{CLIENT_IP}}", clientIP);
+            htmlContent = htmlContent.replace("{{VISITOR_NUMBER}}", String.valueOf(visitorCount));
+            htmlContent = htmlContent.replace("{{TOTAL_FILES}}", String.valueOf(fileCount));
+            htmlContent = htmlContent.replace("{{CURRENT_TIME}}", 
+                new SimpleDateFormat("HH:mm:ss").format(new Date()));
+            
+            writer.println("HTTP/1.1 200 OK");
+            writer.println("Content-Type: text/html; charset=utf-8");
+            writer.println("Content-Length: " + htmlContent.getBytes("UTF-8").length);
+            writer.println();
+            writer.println(htmlContent);
+            writer.flush();
+            
+            activity.updateLog("📄 Sent custom HTML page to " + clientIP);
+            
+        } catch (Exception e) {
+            activity.updateLog("❌ Error loading HTML template: " + e.getMessage());
+            sendDefaultPage(writer, clientIP);
+        }
+    }
+    
+    private String readHtmlFromAssets() throws IOException {
+        InputStream inputStream = activity.getAssets().open("htmlapp/root/index.html");
+        BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, "UTF-8"));
+        StringBuilder stringBuilder = new StringBuilder();
+        String line;
+        
+        while ((line = reader.readLine()) != null) {
+            stringBuilder.append(line).append("\n");
+        }
+        reader.close();
+        
+        return stringBuilder.toString();
+    }
+    
+    private void sendDefaultPage(PrintWriter writer, String clientIP) {
+        String html = "<!DOCTYPE html>" +
+                     "<html>" +
+                     "<head>" +
+                     "<meta charset='UTF-8'>" +
+                     "<meta name='viewport' content='width=device-width, initial-scale=1.0'>" +
+                     "<title>Media Receiver Pro</title>" +
+                     "<style>" +
+                     "body { font-family: Arial; margin: 0; padding: 20px; background: #f5f5f5; }" +
+                     ".container { max-width: 500px; margin: 50px auto; background: white; padding: 30px; border-radius: 10px; text-align: center; }" +
+                     "h1 { color: #2196F3; }" +
+                     "input, button { width: 100%; padding: 15px; margin: 10px 0; }" +
+                     "button { background: #4CAF50; color: white; border: none; cursor: pointer; }" +
+                     ".info { margin-top: 15px; padding: 10px; background: #e8f5e8; border-radius: 5px; }" +
+                     "</style>" +
+                     "</head>" +
+                     "<body>" +
+                     "<div class='container'>" +
+                     "<h1>Media Receiver Pro</h1>" +
+                     "<form method='POST' enctype='multipart/form-data'>" +
+                     "<input type='file' name='file' accept='image/*,video/*,audio/*' required>" +
+                     "<button type='submit'>Upload File</button>" +
+                     "</form>" +
+                     "<div class='info'>" +
+                     "<strong>Your IP:</strong> " + clientIP + "<br>" +
+                     "<strong>Time:</strong> " + new SimpleDateFormat("HH:mm:ss").format(new Date()) +
+                     "</div>" +
+                     "</div>" +
+                     "</body>" +
+                     "</html>";
+        
+        writer.println("HTTP/1.1 200 OK");
+        writer.println("Content-Type: text/html; charset=utf-8");
+        writer.println();
+        writer.println(html);
+        writer.flush();
+    }
+    
+    private void handlePostRequest(BufferedReader reader, PrintWriter writer, String clientIP) throws IOException {
+        try {
+            int contentLength = 0;
+            String line;
+            
+            while ((line = reader.readLine()) != null && !line.isEmpty()) {
+                if (line.startsWith("Content-Length:")) {
+                    contentLength = Integer.parseInt(line.substring(16).trim());
+                }
+            }
+            
+            if (contentLength > 0) {
+                char[] buffer = new char[contentLength];
+                int bytesRead = reader.read(buffer, 0, contentLength);
+                if (bytesRead > 0) {
+                    String postData = new String(buffer, 0, bytesRead);
+                    processFileUpload(postData, writer, clientIP);
+                }
+            } else {
+                sendErrorResponse(writer, 400, "No file data received");
+            }
+            
+        } catch (Exception e) {
+            activity.updateLog("❌ Upload processing error: " + e.getMessage());
+            sendErrorResponse(writer, 500, "Internal Server Error");
+        }
+    }
+    
+    private void processFileUpload(String postData, PrintWriter writer, String clientIP) {
+        try {
+            int filenameStart = postData.indexOf("filename=\"");
+            if (filenameStart == -1) {
+                sendErrorResponse(writer, 400, "No filename found");
+                return;
+            }
+            
+            filenameStart += 10;
+            int filenameEnd = postData.indexOf("\"", filenameStart);
+            String originalFilename = postData.substring(filenameStart, filenameEnd);
+            
+            int fileStart = postData.indexOf("\r\n\r\n", filenameEnd) + 4;
+            int fileEnd = postData.indexOf("\r\n--", fileStart);
+            
+            if (fileStart == -1 || fileEnd == -1) {
+                sendErrorResponse(writer, 400, "Invalid file data");
+                return;
+            }
+            
+            String fileContent = postData.substring(fileStart, fileEnd);
+            byte[] fileBytes = fileContent.getBytes("ISO-8859-1");
+            
+            String fileType = FileUtils.getFileType(originalFilename);
+            String safeFilename = FileUtils.generateSafeFilename(originalFilename);
+            File saveDir = FileUtils.createMediaSubfolder(fileType);
+            File outputFile = new File(saveDir, safeFilename);
+            
+            FileOutputStream fileStream = new FileOutputStream(outputFile);
+            fileStream.write(fileBytes);
+            fileStream.close();
+            
+            fileCount++;
+            activity.updateFileCount(fileCount);
+            
+            String successMessage = String.format(
+                "✅ File received from %s\n   📝 Name: %s\n   📊 Size: %s\n   📁 Saved: %s",
+                clientIP, originalFilename, FileUtils.formatFileSize(fileBytes.length), safeFilename
+            );
+            activity.updateLog(successMessage);
+            
+            sendSuccessResponse(writer, originalFilename, FileUtils.formatFileSize(fileBytes.length));
+            
+        } catch (Exception e) {
+            activity.updateLog("❌ File save error: " + e.getMessage());
+            sendErrorResponse(writer, 500, "File save failed: " + e.getMessage());
+        }
+    }
+    
+    private void sendSuccessResponse(PrintWriter writer, String filename, String fileSize) {
+        String html = "<!DOCTYPE html>" +
+                     "<html>" +
+                     "<head>" +
+                     "<meta charset='UTF-8'>" +
+                     "<meta name='viewport' content='width=device-width, initial-scale=1.0'>" +
+                     "<title>Upload Successful</title>" +
+                     "<style>" +
+                     "body { font-family: Arial; margin: 0; padding: 20px; background: #f5f5f5; }" +
+                     ".container { max-width: 500px; margin: 50px auto; background: white; padding: 40px; border-radius: 15px; text-align: center; }" +
+                     ".success { color: #4CAF50; font-size: 24px; margin-bottom: 20px; }" +
+                     ".btn { background: #2196F3; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 20px; }" +
+                     "</style>" +
+                     "</head>" +
+                     "<body>" +
+                     "<div class='container'>" +
+                     "<div class='success'>✅ Upload Successful!</div>" +
+                     "<p><strong>File:</strong> " + filename + "</p>" +
+                     "<p><strong>Size:</strong> " + fileSize + "</p>" +
+                     "<p><strong>Time:</strong> " + new SimpleDateFormat("HH:mm:ss").format(new Date()) + "</p>" +
+                     "<a href='/' class='btn'>Upload Another File</a>" +
+                     "</div>" +
+                     "</body>" +
+                     "</html>";
+        
+        writer.println("HTTP/1.1 200 OK");
+        writer.println("Content-Type: text/html; charset=utf-8");
+        writer.println();
+        writer.println(html);
+        writer.flush();
+    }
+    
+    private void sendErrorResponse(PrintWriter writer, int code, String message) {
+        writer.println("HTTP/1.1 " + code + " " + message);
+        writer.println("Content-Type: text/html; charset=utf-8");
+        writer.println();
+        writer.println("<html><body><h1>Error " + code + ": " + message + "</h1></body></html>");
+        writer.flush();
+    }
+    
+    private void startServeoTunnel() {
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    activity.updateLog("⏳ Starting public tunnel via serveo.net...");
+                    
+                    Process process = Runtime.getRuntime().exec(new String[]{
+                        "sh", "-c", "ssh -o StrictHostKeyChecking=no -R 80:localhost:" + port + " serveo.net 2>&1"
+                    });
+                    
+                    BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(process.getInputStream()));
+                    
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (line.contains("serveo.net")) {
+                            String publicUrl = "https://" + line.trim();
+                            activity.updatePublicUrl(publicUrl);
+                            activity.updateTunnelStatus(true);
+                            activity.updateLog("🌐 Public URL: " + publicUrl);
+                            activity.updateLog("✅ Server is now publicly accessible!");
+                            break;
+                        }
+                    }
+                    
+                } catch (IOException e) {
+                    activity.updateLog("❌ Serveo tunnel failed: " + e.getMessage());
+                    activity.updateLog("💡 Local server is running on: http://localhost:" + port);
+                }
+            }
+        }).start();
+    }
+    
+    public void stopServer() {
+        isRunning = false;
+        try {
+            if (serverSocket != null) {
+                serverSocket.close();
+            }
+        } catch (IOException e) {
+            // Ignore errors during shutdown
+        }
+        activity.updateServerStatus(false);
+        activity.updateTunnelStatus(false);
+        activity.updateLog("🛑 Server stopped");
+    }
+    
+    public boolean isRunning() {
+        return isRunning;
+    }
+    
+    public String getStoragePath() {
+        return FileUtils.getMediaStorageDir().getAbsolutePath();
+    }
+}

@@ -1,0 +1,63 @@
+package com.mediareceiver.pro;
+
+import android.os.Environment;
+import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+
+public class FileUtils {
+    
+    public static File getMediaStorageDir() {
+        File mediaDir = new File(Environment.getExternalStorageDirectory(), "MediaReceiverPro");
+        if (!mediaDir.exists()) {
+            mediaDir.mkdirs();
+        }
+        return mediaDir;
+    }
+    
+    public static File createMediaSubfolder(String type) {
+        File mainDir = getMediaStorageDir();
+        File subDir = new File(mainDir, type);
+        if (!subDir.exists()) {
+            subDir.mkdirs();
+        }
+        return subDir;
+    }
+    
+    public static String generateSafeFilename(String originalName) {
+        String timestamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(new Date());
+        String safeName = originalName.replaceAll("[^a-zA-Z0-9.-]", "_");
+        return timestamp + "_" + safeName;
+    }
+    
+    public static String getFileType(String filename) {
+        if (filename == null) return "other";
+        
+        String extension = getFileExtension(filename).toLowerCase();
+        switch (extension) {
+            case "jpg": case "jpeg": case "png": case "gif": case "bmp": case "webp":
+                return "images";
+            case "mp4": case "avi": case "mov": case "wmv": case "flv": case "mkv": case "3gp":
+                return "videos";
+            case "mp3": case "wav": case "ogg": case "m4a": case "aac":
+                return "audio";
+            case "pdf": case "doc": case "docx": case "txt": case "xls": case "xlsx":
+                return "documents";
+            default:
+                return "other";
+        }
+    }
+    
+    private static String getFileExtension(String filename) {
+        int lastDot = filename.lastIndexOf('.');
+        return (lastDot == -1) ? "" : filename.substring(lastDot + 1);
+    }
+    
+    public static String formatFileSize(long size) {
+        if (size <= 0) return "0 B";
+        final String[] units = new String[]{"B", "KB", "MB", "GB", "TB"};
+        int digitGroups = (int) (Math.log10(size) / Math.log10(1024));
+        return String.format(Locale.getDefault(), "%.1f %s", size / Math.pow(1024, digitGroups), units[digitGroups]);
+    }
+}
