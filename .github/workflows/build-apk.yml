@@ -21,12 +21,14 @@ jobs:
     - name: Setup Android SDK
       uses: android-actions/setup-android@v3
       
-    - name: Build APK with Project Dir
+    - name: Build APK
       run: |
+        # تثبيت Gradle
         wget -q https://services.gradle.org/distributions/gradle-8.4-bin.zip
         unzip -q gradle-8.4-bin.zip
         
-        ./gradle-8.4/bin/gradle clean assembleDebug -p app/
+        # البناء مع إعدادات كاملة
+        ./gradle-8.4/bin/gradle clean assembleDebug --build-cache --parallel
         
     - name: Upload APK
       uses: actions/upload-artifact@v4
